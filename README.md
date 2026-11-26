@@ -58,7 +58,8 @@ Linux ≥ 6.8.
 | target | state |
 |---|---|
 | Pi 5, one camera (link A → port B → CAM0) | **validated**, 30.5 fps |
-| Pi 5, two cameras (link B → port A → CAM1) | implemented; missing-camera path tested, awaiting 2nd camera |
+| Pi 5, link B → port A → CAM1 | **validated**, 30.4 fps |
+| Pi 5, two cameras simultaneously | implemented; each path validated alone, awaiting 2nd camera |
 | Jetson Orin Nano (JetPack / Yocto L4T r39) | planned: tegracam frontend over the same serdes core, both cameras on port A by VC ([BRINGUP-PI5.md §7](docs/BRINGUP-PI5.md#7-jetson-orin-nano-planned)) |
 
 ## License

@@ -1,9 +1,12 @@
 # Bring-up: Raspberry Pi 5 + Waveshare MAX9296A GMSL HAT + GMSL-1MP-Camera-A
 
-Status 2026-11-25: **single camera validated** with the open driver (link A →
-HAT CSI1 → Pi CAM0, 1280×960 UYVY at 30.5 fps). Dual camera: driver and overlay
-are ready. The missing-camera path is tested; the second camera is not yet
-connected.
+Status 2026-11-26: **both camera paths validated**, one camera at a time, with
+the open driver:
+
+- link A → HAT CSI1 → Pi CAM0: 1280×960 UYVY at 30.5 fps;
+- link B → HAT CSI0 → Pi CAM1: 30.3–30.45 fps (same camera moved to HAT GMSL1).
+
+Both cameras streaming at once is still untested, pending a second camera.
 
 ## 1. Hardware
 
@@ -26,9 +29,12 @@ camera ──FAKRA──> HAT GMSL1 (link B) ─┴─ MAX9296A ─────�
   pipe to controller 2 (`0x042d = 0x2a`).
 - Pi CAM0 (J3) = `rp1-cfe 1f00110000.csi`, I2C bus **10**. Pi CAM1 (J4) =
   `1f00128000.csi`, I2C bus 11.
-- Deserializer I2C reaches the Pi over the CAM0 FFC. Whether the HAT also
-  wires it to its CSI0 connector (bus 11 when J4 is cabled) is still
-  unknown. The overlay keeps both camera nodes on bus 10 regardless.
+- The deserializer's I2C reaches the Pi over **both** FFCs: with the J4 ribbon
+  fitted, 0x48 answers on bus 10 and on bus 11. A bus-11 scan also shows an
+  unidentified device at 0x1a, which bus 10 does not show. By default the overlay
+  keeps both camera nodes on bus 10 and leaves bus 11 disabled. `i2c-cam1` moves
+  them to bus 11; this was tested working with link B only (30.27 fps). Never enable
+  both, because two Pi I2C masters would then drive the same deserializer.
 
 ### I2C map on bus 10 (one camera, link up)
 
@@ -69,6 +75,12 @@ gmsl1mp-ctl preview cam0 cam1         # both cameras side by side
 cat /sys/bus/i2c/devices/10-0042/status
 ```
 
+To reload the driver without a reboot, first unbind the receiver, because rp1-cfe
+holds the module:
+`echo 1f00128000.csi | sudo tee /sys/bus/platform/drivers/rp1-cfe/unbind`
+(`1f00110000.csi` for CAM0). Then run `rmmod gmsl1mp; modprobe gmsl1mp`, and finally
+write the same name to `…/rp1-cfe/bind`.
+
 A raw frame on a host: `ffmpeg -f rawvideo -pix_fmt uyvy422 -s 1280x960 -i a.uyvy a.png`.
 
 ## 4. Verification, stage by stage
@@ -103,6 +115,10 @@ ser_id=0x45
 | `v4l2-compliance -u` (sensor subdev) | 46/46, 0 warnings |
 | H.264 record 5 s | 150 frames, 30/1, 4.93 s |
 | `link-b` with no second camera | link B probe fails cleanly (`-ENOLINK`); link A unaffected, 30.47 fps |
+| link B only (camera on GMSL1, HAT CSI0 → J4), `link-b,no-link-a` | serializer 0x40 → 0x44, port A, 30.37–30.42 fps, valid image |
+| `link-b` with only the link-B camera present | link A fails cleanly (`-ENOLINK`); link B 30.43 fps, H.264 5 s = 150 frames at 30/1 |
+| link B reload (unbind rp1-cfe, rmmod, modprobe, bind) | OK, 30.45 fps |
+| link B with I2C on bus 11 (`i2c-cam1`) | OK, 30.27 fps |
 
 ## 6. Dual camera: what to check when camera 2 + J4 ribbon arrive
 
@@ -111,10 +127,8 @@ ser_id=0x45
 3. Expect in dmesg: `link B: serializer at 0x44, id 0x45` and
    `link B -> MIPI port A, VC0, 4 lanes @ 600 Mbps/lane`.
 4. `gmsl1mp-ctl fps cam1`, then both at once: `gmsl1mp-ctl fps cam0 & gmsl1mp-ctl fps cam1`.
-5. Before step 2, run `sudo i2cdetect -y -r 11` with the J4 ribbon fitted. If
-   0x48 shows up on bus 11 too, the HAT connects the deserializer's I2C to both
-   FFCs. That is harmless as long as only bus 10 talks to it, but note the
-   result here.
+5. Each path is already validated on its own (§5). What remains new here is
+   both links locked at once and both ports streaming simultaneously.
 
 Two cameras into **one** Pi CSI port, separated by virtual channel (what
 Waveshare's `GMSL_2CH` mode does), is not supported on the Pi by this driver:
