@@ -1,0 +1,149 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Raspberry Pi 5: Waveshare MAX9296A GMSL HAT + up to two
+ * GMSL-1MP-Camera-A, one camera per Pi CSI connector.
+ *
+ * Defaults (no parameters) = one camera:
+ *   camera on HAT GMSL0 (link A) -> MAX9296A port B (HAT "CSI1")
+ *     -> Pi CAM/DISP0 (J3), deserializer I2C on the CAM0 bus.
+ *
+ * Add the second camera with "link-b":
+ *   camera on HAT GMSL1 (link B) -> MAX9296A port A (HAT "CSI0")
+ *     -> Pi CAM/DISP1 (J4).
+ *
+ * Both camera nodes live on the same I2C bus as the deserializer (they share
+ * it); only the CSI-2 endpoints go to different Pi receivers.
+ *
+ * Parameters:
+ *   link-b          add the link-B camera
+ *   no-link-a       drop the link-A camera (link-B only setups)
+ *   a-port / b-port MAX9296A MIPI port per camera: 0 = A (HAT CSI0),
+ *                   1 = B (HAT CSI1). Defaults a-port=1, b-port=0.
+ *   a-cam1          link-A camera to Pi CAM1 (J4) instead of CAM0
+ *   b-cam0          link-B camera to Pi CAM0 (J3) instead of CAM1
+ *   i2c-cam1        deserializer I2C reached via the CAM1 connector's bus
+ *   dser-addr       MAX9296A 7-bit address (default 0x48)
+ *   a-vc / b-vc     CSI-2 virtual channel (default 0)
+ *   link-frequency  CSI-2 link frequency in Hz for both (default 300000000
+ *                   = 600 Mbps/lane, the rate Waveshare programs)
+ *
+ * Example (dual camera, the default routing):
+ *   dtoverlay=ws-gmsl1mp,link-b
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2712";
+
+	/* link-A camera */
+	cam_a_frag: fragment@1 {
+		target = <&i2c_csi_dsi0>;
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "okay";
+
+			cam_a: gmsl1mp@42 {
+				compatible = "waveshare,gmsl-1mp-camera-a";
+				reg = <0x42>;
+				status = "okay";
+				deser-addr = <0x48>;
+				gmsl-link = <0>;
+				deser-port = <1>;
+				vc-id = <0>;
+
+				port {
+					cam_a_ep: endpoint {
+						clock-lanes = <0>;
+						data-lanes = <1 2 3 4>;
+						link-frequencies =
+							/bits/ 64 <300000000>;
+						remote-endpoint = <&csi_a_ep>;
+					};
+				};
+			};
+		};
+	};
+
+	/* link-B camera (dormant until "link-b") */
+	cam_b_frag: fragment@2 {
+		target = <&i2c_csi_dsi0>;
+		__dormant__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "okay";
+
+			cam_b: gmsl1mp@44 {
+				compatible = "waveshare,gmsl-1mp-camera-a";
+				reg = <0x44>;
+				status = "okay";
+				deser-addr = <0x48>;
+				gmsl-link = <1>;
+				deser-port = <0>;
+				vc-id = <0>;
+
+				port {
+					cam_b_ep: endpoint {
+						clock-lanes = <0>;
+						data-lanes = <1 2 3 4>;
+						link-frequencies =
+							/bits/ 64 <300000000>;
+						remote-endpoint = <&csi_b_ep>;
+					};
+				};
+			};
+		};
+	};
+
+	csi_a_frag: fragment@3 {
+		target = <&csi0>;
+		__overlay__ {
+			status = "okay";
+			brcm,media-controller;
+
+			port {
+				csi_a_ep: endpoint {
+					remote-endpoint = <&cam_a_ep>;
+					clock-lanes = <0>;
+					data-lanes = <1 2 3 4>;
+					clock-noncontinuous;
+				};
+			};
+		};
+	};
+
+	csi_b_frag: fragment@4 {
+		target = <&csi1>;
+		__dormant__ {
+			status = "okay";
+			brcm,media-controller;
+
+			port {
+				csi_b_ep: endpoint {
+					remote-endpoint = <&cam_b_ep>;
+					clock-lanes = <0>;
+					data-lanes = <1 2 3 4>;
+					clock-noncontinuous;
+				};
+			};
+		};
+	};
+
+	__overrides__ {
+		link-b = <0>, "+2+4";
+		no-link-a = <0>, "-1-3";
+		a-port = <&cam_a>, "deser-port:0";
+		b-port = <&cam_b>, "deser-port:0";
+		a-vc = <&cam_a>, "vc-id:0";
+		b-vc = <&cam_b>, "vc-id:0";
+		dser-addr = <&cam_a>, "deser-addr:0",
+			    <&cam_b>, "deser-addr:0";
+		a-cam1 = <&csi_a_frag>, "target:0=", <&csi1>;
+		b-cam0 = <&csi_b_frag>, "target:0=", <&csi0>;
+		i2c-cam1 = <&cam_a_frag>, "target:0=", <&i2c_csi_dsi>,
+			   <&cam_b_frag>, "target:0=", <&i2c_csi_dsi>;
+		link-frequency = <&cam_a_ep>, "link-frequencies#0",
+				 <&cam_b_ep>, "link-frequencies#0";
+	};
+};
