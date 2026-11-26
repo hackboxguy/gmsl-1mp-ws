@@ -6,7 +6,9 @@ the open driver:
 - link A → HAT CSI1 → Pi CAM0: 1280×960 UYVY at 30.5 fps;
 - link B → HAT CSI0 → Pi CAM1: 30.3–30.45 fps (same camera moved to HAT GMSL1).
 
-Both cameras streaming at once is still untested, pending a second camera.
+Since then the MAX9296A moved into its own driver (gmsl_max9296a, repo
+gmsl-max9296a) and gmsl1mp became a client of it. A 1MP on link A and a GMSL2
+VD56G4 on link B stream together (§8).
 
 ## 1. Hardware
 
@@ -54,7 +56,8 @@ sudo ./scripts/install-pi5.sh          # one camera on link A -> HAT CSI1 -> CAM
 sudo reboot
 ```
 
-The script uses DKMS (rebuilt on kernel updates). It compiles the overlay into
+The script first installs gmsl_max9296a from a gmsl-max9296a checkout next to
+this repo (or `MAX9296A_DIR`). It uses DKMS (rebuilt on kernel updates). It compiles the overlay into
 `/boot/firmware/overlays/ws-gmsl1mp.dtbo`, installs `gmsl1mp-ctl` and sets
 `camera_auto_detect=0` plus `dtoverlay=ws-gmsl1mp[,…]`. Overlay parameters are
 documented at the top of `dts/ws-gmsl1mp-overlay.dts`.
@@ -89,18 +92,19 @@ A raw frame on a host: `ffmpeg -f rawvideo -pix_fmt uyvy422 -s 1280x960 -i a.uyv
 sudo i2ctransfer -f -y 10 w2@0x48 0x00 0x0d r1   # 0x94  deserializer alive
 sudo i2ctransfer -f -y 10 w2@0x48 0x0b 0xcb r1   # bit0 = GMSL1 link A locked (0x0ccb: link B)
 sudo i2ctransfer -f -y 10 w1@0x42 0x1e r1        # 0x45  serializer, remapped
-cat /sys/bus/i2c/devices/10-0042/status          # everything above + routing
+cat /sys/bus/i2c/devices/10-0042/status          # link, routing, port state, serializer
+cat /sys/bus/i2c/devices/10-0048/status          # deserializer: all links
 gmsl1mp-ctl fps cam0                              # frames
 ```
 
-`status` while idle on the validated rig:
+`status` while idle (1MP on link A -> port A -> CAM1). `phy_stdby_n` is 0 because
+an idle port is held in PHY standby. It goes to 0x3 (port A) while streaming:
 
 ```
-link=A port=B vc=0 lanes=4 link_freq=300000000 ser_addr=0x42
-gmsl1_lock_a=1 gmsl1_lock_b=0 gmsl1_en=0x01 csi_out=0x00 streaming=0
-port_lanes_reg=0xd0 port_dpll_reg=0x26
-pipe_map_en=0x07 map0_dst=0x1e dphy_dest=0x2a
-ser_id=0x45
+link=A mode=gmsl1 pipe=X port=A vc=0 dt=0x1e lanes=4 link_freq=300000000
+locked=1 link_en=0x01 reg6=0x9f csi_out=0x42 phy_stdby_n=0x0 port_streaming=0
+pipe_map_en=0x07 dphy_dest=0x15
+ser_addr=0x42 ser_id=0x45
 ```
 
 ## 5. Results
@@ -132,20 +136,44 @@ ser_id=0x45
 
 Two cameras into **one** Pi CSI port, separated by virtual channel (what
 Waveshare's `GMSL_2CH` mode does), is not supported on the Pi by this driver:
-rp1-cfe takes one source subdev per receiver. The serdes core already supports
-it (`deser-port` + `vc-id` per camera), which is the topology needed on the
-Jetson adapter (§7).
+rp1-cfe takes one source subdev per receiver. The deserializer driver already
+supports it (`gmsl,mipi-port` + `gmsl,vc` per link in its DT node), which is the
+topology needed on the Jetson adapter (§7).
 
 ## 7. Jetson Orin Nano (planned)
 
 The Waveshare Jetson MAX9296A board brings out **port A only**, as the
 gmsl-vd56g4 bring-up found (`gmsl-vd56g4/docs/ORIN-WAVESHARE-BRINGUP.md` §3).
-There, both cameras are `deser-port = <0>` with `vc-id = <0>` / `<1>` on one Orin
+There, both links use `gmsl,mipi-port = <0>` with `gmsl,vc = <0>` / `<1>` on one Orin
 CSI port. Plan:
 
-- reuse `gmsl1mp_serdes.c` unchanged;
+- reuse gmsl_max9296a unchanged (it has no Pi-specific parts); a Jetson overlay
+  describes the deserializer node;
 - add `gmsl1mp_tegracam.c` (tegracam / NVIDIA camera framework frontend, one
-  sensor node per camera, `vc-id` per node) for JetPack 6/7 and Yocto L4T r39,
+  sensor node per camera, VC from its deserializer link) for JetPack 6/7 and Yocto L4T r39,
   selected with `make board=orin NV_OOT=…` as in gmsl-vd56g4;
 - the Jetson overlay should mirror Waveshare's tegra DT (lane/pixel-clock
   fields for YUV422 at 600 Mbps/lane).
+
+## 8. 1MP + VD56G4 (GMSL2) together
+
+Cabling: 1MP on HAT GMSL0 (link A), VD56G4 on HAT GMSL1 (link B), HAT CSI0 -> Pi
+J4 (CAM1), HAT CSI1 -> Pi J3 (CAM0). Config: `dtoverlay=ws-max9296a-hat,a-1mp,b-vd56g4`
+with gmsl_max9296a, gmsl1mp and vb56g4a (client mode) installed.
+
+Results after a power cycle:
+
+| test | result |
+|---|---|
+| 1MP streaming, VD56G4 started/stopped 20× | 1MP 2100/2100 full frames, no sequence gaps; VD56G4 20/20 cycles with 15/15 full frames |
+| VD56G4 streaming, 1MP started/stopped 20× | VD56G4 2100/2100, no gaps; 1MP 20/20 cycles |
+| 1MP alone (VD56G4 idle) | 30.46 fps, v4l2-compliance 46/46, 20/20 cycles |
+| VD56G4 alone (1MP idle) | 29.9 fps, 20/20 cycles |
+
+How the mixed case was solved is recorded in gmsl-max9296a's README
+("Behaviour this driver encodes"). Two points matter for users:
+- each MIPI port is started per stream;
+- a GMSL1 camera must come up before a GMSL2 camera on the same HAT. The driver
+  enforces this for up to 10 s after boot. This is an **open known issue**: while
+  the GMSL2 camera is up, the 1MP cannot be brought up again until a power
+  cycle. See gmsl-max9296a's README, "Known issues".

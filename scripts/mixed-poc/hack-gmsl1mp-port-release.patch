@@ -1,0 +1,40 @@
+diff --git a/driver/gmsl1mp_serdes.c b/driver/gmsl1mp_serdes.c
+index 97b3d4e..333c695 100644
+--- a/driver/gmsl1mp_serdes.c
++++ b/driver/gmsl1mp_serdes.c
+@@ -486,20 +486,31 @@ void gmsl1mp_link_remove(struct gmsl1mp_deser *des,
+ }
+ EXPORT_SYMBOL_GPL(gmsl1mp_link_remove);
+ 
++/* HACK (throwaway): restart this camera's MIPI port after stream-on and never
++ * clear CSI_OUT_EN, to test the port release inside s_stream. */
++static int hack_pulse_ms = 100;
++module_param(hack_pulse_ms, int, 0644);
++
+ int gmsl1mp_stream(struct gmsl1mp_deser *des,
+ 		   const struct gmsl1mp_link_cfg *cfg, bool on)
+ {
+ 	int ret = 0;
++	u8 m = cfg->port ? 0xc0 : 0x30, v = 0xf0;
+ 
+ 	mutex_lock(&des->lock);
+ 	if (on) {
+-		if (des->streaming == 0)
+-			ret = des_write(des, DES_REG_BACKTOP12, DES_CSI_OUT_ON);
++		ret = des_write(des, DES_REG_BACKTOP12, DES_CSI_OUT_ON);
++		if (!ret && hack_pulse_ms >= 0) {
++			des_read(des, 0x0332, &v);
++			des_write(des, 0x0332, v & ~m);
++			msleep(hack_pulse_ms);
++			des_write(des, 0x0332, v | m);
++			dev_info(des->dev, "HACK: port %c restarted\n", 'A' + cfg->port);
++		}
+ 		if (!ret)
+ 			des->streaming++;
+ 	} else if (des->streaming) {
+-		if (--des->streaming == 0)
+-			ret = des_write(des, DES_REG_BACKTOP12, DES_CSI_OUT_OFF);
++		--des->streaming;
+ 	}
+ 	mutex_unlock(&des->lock);
+ 	return ret;

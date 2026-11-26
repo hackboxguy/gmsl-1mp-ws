@@ -4,6 +4,17 @@ Where the driver's register values come from, what is known about each, and
 how the vendor sequence was split into the driver's global / per-link /
 stream steps.
 
+> **Since the split** (gmsl_max9296a, repo gmsl-max9296a), the values below live in two places:
+> - **The deserializer driver** does the chip init, PoC, ports, pipe maps, the soft
+>   DT override (from `gmsl,data-type`) and the per-stream port start.
+> - **This camera driver** hands over its MAX9296A GMSL1 block values
+>   (`0x0b06/07/0d/0f/96`), soft BPP 8 and the YUV422 8/10-bit mux flag
+>   (`0x0322`, which turned out to be per pipe: bit 4 + pipe) at link claim
+>   (`gmsl1mp_ser.c`), and keeps the MAX96701 sequence.
+>
+> The stream gate is no longer `0x0313` on/off. `CSI_OUT_EN` stays on and each
+> MIPI port is released from PHY standby (`0x0332`) per stream.
+
 ## 1. Source
 
 Waveshare distributes its Raspberry Pi 5 support as

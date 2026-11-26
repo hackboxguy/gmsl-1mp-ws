@@ -1,0 +1,50 @@
+diff --git a/driver/vb56g4a.c b/driver/vb56g4a.c
+index ad132aa..98a6e7c 100644
+--- a/driver/vb56g4a.c
++++ b/driver/vb56g4a.c
+@@ -1700,6 +1700,25 @@ static int vb56g4a_detect(struct sensor_priv *sensor)
+ 	return -EFAULT;
+ }
+ 
++/* HACK (throwaway): restart MAX9296A MIPI port B (PHY2/3 standby, 0x0332
++ * bits 7:6) from stream-on. 0 = off, 1 = before the sensor start command,
++ * 2 = after the sensor reports streaming. */
++static int hack_port_order;
++module_param(hack_port_order, int, 0644);
++static int hack_pulse_ms = 100;
++module_param(hack_pulse_ms, int, 0644);
++
++static void hack_port_b_pulse(struct sensor_priv *sensor)
++{
++	u8 v = 0xf0;
++
++	i2c_addr16_rd8(sensor, MAX_DSER_ADDR, 0x0332, &v);
++	i2c_addr16_wr8(sensor, MAX_DSER_ADDR, 0x0332, v & ~0xc0);
++	msleep(hack_pulse_ms);
++	i2c_addr16_wr8(sensor, MAX_DSER_ADDR, 0x0332, v | 0xc0);
++	dev_info(sensor->dev, "HACK: port B restarted (order %d)\n", hack_port_order);
++}
++
+ static int vb56g4a_set_gain(struct sensor_priv *sensor, u32 val)
+ {
+ 	int ret = 0;
+@@ -3520,6 +3539,9 @@ static int vb56g4a_start_streaming(struct sensor_priv *sensor)
+ 	}
+ #endif
+ 
++	if (vb56g4a_ext_deser && hack_port_order == 1)
++		hack_port_b_pulse(sensor);
++
+ 	err = vb56g4a_write_table(sensor, mode_table[VB56G4A_MODE_START_STREAM], true);
+ 	if (err)
+ 		goto error;
+@@ -3538,6 +3560,9 @@ static int vb56g4a_start_streaming(struct sensor_priv *sensor)
+ 				  VB56G4A_MASK_DEFAULT, VB56G4A_SYSTEM_FSM_STREAMING);
+ 	if (err)
+ 		goto error;
++
++	if (vb56g4a_ext_deser && hack_port_order == 2)
++		hack_port_b_pulse(sensor);
+ 	else {
+ 		dev_info(sensor->dev, "stream started\n");
+ 		goto exit;
