@@ -5,7 +5,7 @@
 #   make KERNEL_SRC=<dir> ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu-
 
 obj-m := gmsl1mp.o
-gmsl1mp-y := gmsl1mp_serdes.o gmsl1mp_v4l2.o
+gmsl1mp-y := gmsl1mp_ser.o gmsl1mp_v4l2.o
 
 KERNEL_SRC ?= /lib/modules/$(shell uname -r)/build
 
